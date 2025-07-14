@@ -47,7 +47,7 @@ unsigned int UTC = -3; // UTC = value in hour (SUMMER TIME) [For example: Paris=
 int Display_backlight = 2; // Adjust it 0 to 7
 int led_ring_brightness = 30; // Adjust it 0 to 255
 int led_ring_brightness_dark = 3;
-int led_ring_brightness_flash = 180; // Adjust it 0 to 255 default value was [250]
+int led_ring_brightness_flash = 200; // Adjust it 0 to 255 default value was [250]
 const long utcOffsetInSeconds = 3600; // UTC + 1H / Offset in second
 
 bool welcomeAlarmSetup;
@@ -58,6 +58,7 @@ bool touchLessSensor;
 String formattedDate;
 String dayStamp;
 String timeStamp;
+unsigned long lastCheckedMinute = -1;
 
 // ========================================================================
 //Enables watchdog with setup to timeout for 12 sec
@@ -263,6 +264,12 @@ void setup() {
   displayOled.print(urlServer);
   displayOled.display();
 
+  
+  // ✅ Set timezone properly for localtime()
+  setenv("TZ", "UTC-3", 1);
+  tzset();
+  //setup without summer time
+  timeClient.setTimeOffset(utcOffsetInSeconds*UTC);
   timeClient.begin();
 
   display.setBrightness(Display_backlight);
@@ -291,11 +298,26 @@ void setup() {
   // Repeat the alarm (third parameter) with unlimited count = 0 (fourth parameter).
   timerAlarm(Timer0_Cfg, 1000000, true, 0);
 
+  //Check what’s loaded into alarms[] prevously
+  for (int i = 0; i < MAX_ALARMS; i++) {
+    if (alarms[i].days[0] != '\0') {
+      Serial.print("Loaded alarm ");
+      Serial.print(i);
+      Serial.print(": ");
+      Serial.print(alarms[i].hour);
+      Serial.print(":");
+      Serial.print(alarms[i].minute);
+      Serial.print(" on ");
+      Serial.println(alarms[i].days);
+    }
+  }
+
   //Enables Watchdog 
   /*esp_task_wdt_deinit();            //wdt is enabled by default, so we need to deinit it first
   esp_task_wdt_init(&wdt_config);
   esp_task_wdt_add(NULL);*/
   
+
 }
 
 void loop() {
@@ -303,21 +325,22 @@ void loop() {
   //Rearm watchdog
   //esp_task_wdt_reset();
 
+  // switch on the ring in blue
+  pixels.clear(); // Set all pixel colors to 'off'
+  blue_light();
+
   // Update the time
   timeClient.update();
-
   //Serial.print("Time: ");
-  //Serial.println(timeClient.getFormattedTime());
-  unsigned long epochTime = timeClient.getEpochTime();
-  struct tm *ptm = gmtime ((time_t *)&epochTime); 
+  time_t epochTime = timeClient.getEpochTime();
+  struct tm *ptm = localtime(&epochTime); 
+
   int currentYear = ptm->tm_year+1900;
   //Serial.print("Year: ");
   //Serial.println(currentYear);
-  
   int monthDay = ptm->tm_mday;
   //Serial.print("Month day: ");
   //Serial.println(monthDay);
-
   int currentMonth = ptm->tm_mon+1;
   //Serial.print("Month: ");
   //Serial.println(currentMonth);
@@ -327,15 +350,8 @@ void loop() {
   timeClient.setTimeOffset(utcOffsetInSeconds*UTC);} // Change daylight saving time - Summer
   else {timeClient.setTimeOffset((utcOffsetInSeconds*UTC) - 3600);} // Change daylight saving time - Winter*/
 
-  // switch on the ring in blue
-  pixels.clear(); // Set all pixel colors to 'off'
-  blue_light();
-
-  //setup without summer time
-  timeClient.setTimeOffset(utcOffsetInSeconds*UTC);
   // Get formattedTime as HH:mm:ss
   formattedDate = timeClient.getFormattedTime();
-
   // Get current Date
   dayStamp = String(monthDay) + "-" + String(currentMonth) + "-" + String(currentYear);
   //Serial.print("DATE: ");
@@ -370,28 +386,57 @@ void loop() {
     flagHalfTimer=0;
   }
 
-  //Setup verify alarm from EEPROM
-  int weekDayIndex = ptm->tm_wday; // 0=Sunday
-  String days[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-  String today = days[weekDayIndex];
+
+int weekDayIndex = ptm->tm_wday; // 0 = Sunday
+String days[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+String today = days[weekDayIndex];  // 0=Sunday
+
+// Only check alarms once per new minute
+int nowMinute = timeClient.getMinutes();
+if (nowMinute != lastCheckedMinute) {
+  lastCheckedMinute = nowMinute;
+
+  //Check what’s loaded into alarms[] prevously
+  for (int i = 0; i < MAX_ALARMS; i++) {
+    if (alarms[i].days[0] != '\0') {
+      Serial.print("Loaded alarm ");
+      Serial.print(i);
+      Serial.print(": ");
+      Serial.print(alarms[i].hour);
+      Serial.print(":");
+      Serial.print(alarms[i].minute);
+      Serial.print(" on ");
+      Serial.println(alarms[i].days);
+
+      Serial.print("Comparing today='");
+      Serial.print(today);
+      Serial.print("' with stored='");
+      Serial.print(alarms[i].days);
+      Serial.println("'");
+    }
+  }
 
   for (int i = 0; i < MAX_ALARMS; i++) {
     if (alarms[i].days[0] != '\0') {
-      if (String(alarms[i].days).indexOf(today) >= 0 &&
-          timeClient.getHours() == alarms[i].hour &&
-          timeClient.getMinutes() == alarms[i].minute) {
-        myDFPlayer.play(1);
-        delay(60000);
+      if (String(alarms[i].days).indexOf(today) >= 0 && timeClient.getHours() == alarms[i].hour && timeClient.getMinutes() == alarms[i].minute) {
+        Serial.print("🚨 Ativou o alarme! ");
+        Serial.print(alarms[i].hour);
+        Serial.print(":");
+        Serial.print(alarms[i].minute);
+        Serial.print(" on ");
+        Serial.println(today);
+        myDFPlayer.play(2);
         break;
       }
     }
   }
+}
 
   /////////////////////////////////////////////////////////////////////////////////////////////////////////
   WiFiClient client = server.available();
   if (client) {
     if (!welcomeAlarmSetup) {
-      myDFPlayer.play(6); //5
+      //myDFPlayer.play(6); //5
       welcomeAlarmSetup = true;
     }
     currentTime = millis();
@@ -409,7 +454,8 @@ void loop() {
         if (c == '\n') {
           if (currentLine.length() == 0) {
             client.println("HTTP/1.1 200 OK");
-            client.println("Content-type:text/html");
+            //client.println("Content-type:text/html");
+            client.println("Content-Type: text/html; charset=UTF-8");
             client.println("Connection: close");
             client.println();
 
@@ -461,21 +507,32 @@ void loop() {
               client.println("</select><br><br>");
               client.println("<input type='submit' value='Set Alarm'></form>");
 
-			  loadAlarmFromEEPROM();
-        
-			  client.println("<h3>Stored Alarms:</h3><ul>");
+			        //loadAlarmFromEEPROM();
+
+			        client.println("<h3>Stored Alarms:</h3><ul>");
               for (int i = 0; i < MAX_ALARMS; i++) {
                 if (alarms[i].days[0] != '\0') {
-                  client.print("<li>⏰ ");
+                  client.print("<li>⏰  ");
                   client.print(alarms[i].hour);
                   client.print(":");
                   if (alarms[i].minute < 10) client.print("0");
                   client.print(alarms[i].minute);
                   client.print(" on ");
                   client.print(alarms[i].days);
-                  client.println("</li>");
+                  client.print("   <a href='/delete?index=");
+                  client.print(i);
+                  client.println("'><button>Delete</button></a></li>");
                 }
               }
+
+              if (header.indexOf("GET /delete?index=") >= 0) {
+                int idxStart = header.indexOf("index=") + 6;
+                int idxEnd = header.indexOf(" ", idxStart);
+                int index = header.substring(idxStart, idxEnd).toInt();
+                handleDeleteAlarm(index);
+                client.println("<html><body><h3>Alarm Deleted!</h3><a href='/'>Back</a></body></html>");
+              }
+
               client.println("</body></html>");
             }
             client.println();
@@ -497,7 +554,7 @@ void loop() {
 
 }
 
-void saveAlarmToEEPROM() {
+void saveAlarmsToEEPROM() {
   int addr = 0;
   for (int i = 0; i < MAX_ALARMS; i++) {
     EEPROM.write(addr++, alarms[i].hour);
@@ -520,6 +577,91 @@ void loadAlarmFromEEPROM() {
   }
 }
 
+void handleAlarmSetup() {
+  String html = alarm_html;
+  html.replace("%HOUR_OPTIONS%", createOptions(23));
+  html.replace("%MINUTE_OPTIONS%", createOptions(59));
+  WiFiClient client = server.available();
+  if (client) {
+    client.println("HTTP/1.1 200 OK");
+    //client.println("Content-type:text/html");
+    client.println("Content-Type: text/html; charset=UTF-8");
+    client.println("Connection: close");
+    client.println();
+    client.println(html);
+    client.stop();
+  }
+}
+
+void handleSetAlarm(String request) {
+  String selectedDaysTemp = "";
+  int hour = 0, minute = 0;
+
+  int paramStart = request.indexOf("/set?");
+  if (paramStart > 0) {
+    String params = request.substring(paramStart + 5);
+    int hIndex = params.indexOf("hour=");
+    int mIndex = params.indexOf("minute=");
+    
+    if (hIndex > -1 && mIndex > -1) {
+      int ampersand = params.indexOf("&", hIndex);
+      if (ampersand > -1)
+        hour = params.substring(hIndex + 5, ampersand).toInt();
+      else
+        hour = params.substring(hIndex + 5).toInt();
+
+      ampersand = params.indexOf("&", mIndex);
+      if (ampersand > -1)
+        minute = params.substring(mIndex + 7, ampersand).toInt();
+      else
+        minute = params.substring(mIndex + 7).toInt();
+    }
+
+    int dIndex = 0;
+    bool first = true;
+    while ((dIndex = params.indexOf("day=", dIndex)) >= 0) {
+      int valStart = dIndex + 4;
+      int valEnd = params.indexOf("&", valStart);
+      if (valEnd == -1) valEnd = params.length();
+      String day = params.substring(valStart, valEnd);
+    if (selectedDaysTemp.indexOf(day) == -1) {
+      if (!first) selectedDaysTemp += ",";
+        selectedDaysTemp += day;
+        first = false;
+    }
+    dIndex = valEnd;
+  }
+}
+
+  // Now insert into first available empty slot
+  for (int i = 0; i < MAX_ALARMS; i++) {
+    if (alarms[i].days[0] == '\0') {
+      alarms[i].hour = hour;
+      alarms[i].minute = minute;
+      selectedDaysTemp.toCharArray(alarms[i].days, sizeof(alarms[i].days));
+      break;
+    }
+  }
+
+  saveAlarmsToEEPROM();
+}
+
+void handleDeleteAlarm(int index) {
+  if (index < 0 || index >= MAX_ALARMS) return;
+
+  // Shift remaining alarms
+  for (int i = index; i < MAX_ALARMS - 1; i++) {
+    alarms[i] = alarms[i + 1];
+  }
+
+  // Clear the last alarm slot
+  alarms[MAX_ALARMS - 1].hour = 0;
+  alarms[MAX_ALARMS - 1].minute = 0;
+  memset(alarms[MAX_ALARMS - 1].days, 0, sizeof(alarms[MAX_ALARMS - 1].days));
+
+  saveAlarmsToEEPROM();  // Save updated list
+}
+
 String createOptions(int max) {
   String options = "";
   for (int i = 0; i <= max; i++) {
@@ -532,55 +674,6 @@ String processor(const String& var) {
   if (var == "HOUR_OPTIONS") return createOptions(23);
   if (var == "MINUTE_OPTIONS") return createOptions(59);
   return String();
-}
-
-void handleAlarmSetup() {
-  String html = alarm_html;
-  html.replace("%HOUR_OPTIONS%", createOptions(23));
-  html.replace("%MINUTE_OPTIONS%", createOptions(59));
-  WiFiClient client = server.available();
-  if (client) {
-    client.println("HTTP/1.1 200 OK");
-    client.println("Content-type:text/html");
-    client.println("Connection: close");
-    client.println();
-    client.println(html);
-    client.stop();
-  }
-}
-
-void handleSetAlarm(String request) {
-  selectedDays = "";
-  int paramStart = request.indexOf("/set?");
-  if (paramStart > 0) {
-    String params = request.substring(paramStart + 5);
-    int hIndex = params.indexOf("hour=");
-    int mIndex = params.indexOf("minute=");
-    if (hIndex > -1 && mIndex > -1) {
-      int ampersand = params.indexOf("&", hIndex);
-      if (ampersand > -1)
-        alarmHour = params.substring(hIndex + 5, ampersand).toInt();
-      else
-        alarmHour = params.substring(hIndex + 5).toInt();
-
-      ampersand = params.indexOf("&", mIndex);
-      if (ampersand > -1)
-        alarmMinute = params.substring(mIndex + 7, ampersand).toInt();
-      else
-        alarmMinute = params.substring(mIndex + 7).toInt();
-    }
-
-    int dIndex = 0;
-    while ((dIndex = params.indexOf("day=", dIndex)) >= 0) {
-      int valStart = dIndex + 4;
-      int valEnd = params.indexOf("&", valStart);
-      if (valEnd == -1) valEnd = params.length();
-      String day = params.substring(valStart, valEnd);
-      if (selectedDays.indexOf(day) == -1) selectedDays += day + ",";
-      dIndex = valEnd;
-    }
-  }
-  saveAlarmToEEPROM();
 }
 
 void updateDisplayOled(String dateStamp, String timeStamp, String temperature) {
