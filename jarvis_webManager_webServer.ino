@@ -50,6 +50,10 @@ int led_ring_brightness_dark = 3;
 int led_ring_brightness_flash = 200; // Adjust it 0 to 255 default value was [250]
 const long utcOffsetInSeconds = 3600; // UTC + 1H / Offset in second
 
+int currentYear;
+int currentMonth;
+int monthDay;
+
 bool welcomeAlarmSetup;
 bool ringLightStatus;
 bool touchLessSensor;
@@ -335,20 +339,18 @@ void loop() {
   time_t epochTime = timeClient.getEpochTime();
   struct tm *ptm = localtime(&epochTime); 
 
-  int currentYear = ptm->tm_year+1900;
+  currentYear = ptm->tm_year+1900;
   //Serial.print("Year: ");
   //Serial.println(currentYear);
-  int monthDay = ptm->tm_mday;
+  monthDay = ptm->tm_mday;
   //Serial.print("Month day: ");
   //Serial.println(monthDay);
-  int currentMonth = ptm->tm_mon+1;
+  currentMonth = ptm->tm_mon+1;
   //Serial.print("Month: ");
   //Serial.println(currentMonth);
 
   //setup for summer time
-  /*if((currentMonth*30 + monthDay) >= 121 && (currentMonth*30 + monthDay) < 331){
-  timeClient.setTimeOffset(utcOffsetInSeconds*UTC);} // Change daylight saving time - Summer
-  else {timeClient.setTimeOffset((utcOffsetInSeconds*UTC) - 3600);} // Change daylight saving time - Winter*/
+  //setupForSummerTime()
 
   // Get formattedTime as HH:mm:ss
   formattedDate = timeClient.getFormattedTime();
@@ -815,24 +817,22 @@ void display_cuckoo(){
 }
 
 void displayHalfTime() {
-  for(int i=0; i<(NUMPIXELS/2);i++){
+  for(int i=0; i<(NUMPIXELS);i++){
     pixels.setPixelColor(i, pixels.Color(255, 153, 51));
     pixels.show();
-    delay(50);
+    delay(100);
   }
-  for(int i=0; i<(NUMPIXELS/2);i++){
+  for(int i=0; i<NUMPIXELS; i++){
     pixels.setPixelColor(i, pixels.Color(red, green, blue));
     pixels.show();
-    delay(50);
+    delay(100);
   }
-  for(int i=18; i<NUMPIXELS; i++){
-    pixels.setPixelColor(i, pixels.Color(255, 153, 51));
-    pixels.show();
-    delay(50);
-  }
-  for(int i=18; i<NUMPIXELS; i++){
-    pixels.setPixelColor(i, pixels.Color(red, green, blue));
-    pixels.show();
-    delay(50);
-  }
+}
+
+void setupForSummerTime() {
+  if((currentMonth*30 + monthDay) >= 121 && (currentMonth*30 + monthDay) < 331){
+    timeClient.setTimeOffset(utcOffsetInSeconds*UTC); // Change daylight saving time - Summer
+  } else {
+    timeClient.setTimeOffset((utcOffsetInSeconds*UTC) - 3600); // Change daylight saving time - Winter*/
+    } 
 }
