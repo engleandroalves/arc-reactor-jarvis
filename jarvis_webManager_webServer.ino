@@ -16,6 +16,7 @@
 #include <WiFiClientSecure.h>  // For HTTPS
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <UrlEncode.h>
 
 //Which pin is used to LEDs
 #define led1 32
@@ -78,6 +79,8 @@ unsigned long lastCheckedMinute = -1;
 int Status_Led = LOW;
 
 //-----------------------------------------------Weather vars---------------------------------------------
+String newCity;
+String newCityEncoded;
 char storedCity[32] = "Define your city";  // default
 String countryCode = "BR";
 //const String urlEncodedCidade = encodeURIComponent(cidade);
@@ -185,449 +188,8 @@ void IRAM_ATTR Timer0_ISR() {
   digitalWrite(keepAlive, !digitalRead(keepAlive));
   //updateDisplayOled(dayStamp, timeStamp, "15");
   counterTimer++;
-  if (counterTimer >= 10) {
-    /*temperature = fetchWeather(storedCity);
-    Serial.print("Current temp in ");
-    Serial.print(storedCity);
-    Serial.print(": ");
-    Serial.println(temperature);*/
-    counterTimer = 0;
-  }
 }
 
-//---------------------------------------Main Setup-------------------------------------------------
-void setup() {
-
-  // blue leds
-  pinMode(led1, OUTPUT);
-  pinMode(led2, OUTPUT);
-  // switch on the blue leds
-  digitalWrite(led1, 1);
-  digitalWrite(led2, 1);
-
-  ringLightStatus = true;
-
-  //Keepalive connected on LED pin 2 dev kit board
-  pinMode(keepAlive, OUTPUT);
-
-  //load EEPROM config
-  EEPROM.begin(EEPROM_SIZE);
-  loadAlarmFromEEPROM();
-
-  loadCityFromEEPROM();
-  Serial.print("Loaded city from EEPROM: ");
-  Serial.println(storedCity);
-
-  // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
-  if (!displayOled.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println(F("SSD1306 allocation failed"));
-    for (;;)
-      ;  // Don't proceed, loop forever
-  }
-  // Show initial display buffer contents on the screen --
-  // the library initializes this with an Adafruit splash screen.
-  displayOled.display();
-  delay(2000);  // Pause for 2 seconds
-  displayOled.clearDisplay();
-
-  displayOled.setTextSize(1);
-  displayOled.setTextColor(SSD1306_WHITE);
-  displayOled.setCursor(0, 0);
-  displayOled.print("Iniciando ...");
-  displayOled.display();
-
-  Serial.begin(115200);
-  Serial.println("\n Starting");
-
-  // Init serial port for DFPlayer Mini
-  softwareSerial.begin(9600);
-  delay(1000);
-
-  do {
-    Serial.println("Initializing DFPlayer Mini Module...");
-    myDFPlayer.begin(softwareSerial);
-    delay(1000);
-    //Set serial communictaion time out 500ms
-    myDFPlayer.setTimeOut(500);
-    delay(1000);
-    // Set volume to maximum (0 to 30).
-    myDFPlayer.volume(30);
-    delay(1000);
-    //----Set different EQ----
-    myDFPlayer.EQ(DFPLAYER_EQ_NORMAL);
-    delay(1000);
-    // Play the first MP3 file on the SD card
-    myDFPlayer.play(3);
-    delay(2000);
-
-    if (myDFPlayer.available()) {
-      Serial.println("DFPlayer Mini module initialized!");
-    } else {
-      Serial.println("DFPlayer Mini with error!");
-    }
-
-  } while (!myDFPlayer.available());
-
-
-  //manager.resetSettings();
-
-  manager.setTimeout(200);
-  //fetches ssid and password and tries to connect, if connections succeeds it starts an access point with the name called "IRON_MAN_ARC" and waits in a blocking loop for configuration
-  res = manager.autoConnect("IRON_MAN_ARC", "password");
-
-  if (!res) {
-    Serial.println("failed to connect and timeout occurred");
-    myDFPlayer.play(2);  //  1_activate_wifi.mp3
-    ESP.restart();       //reset and try again
-  }
-
-  WiFi.begin();
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("*************************************************************");
-    localIP = WiFi.localIP().toString();
-    Serial.println(localIP);
-    Serial.println("*************************************************************");
-
-    urlServer = "http://" + localIP;
-    delay(160);
-    server.begin();
-    welcomeAlarmSetup = false;
-  }
-
-  displayOled.clearDisplay();
-  displayOled.setCursor(0, 55);
-  displayOled.print(urlServer);
-  displayOled.display();
-
-
-  // ✅ Set timezone properly for localtime()
-  setenv("TZ", "UTC-3", 1);
-  tzset();
-  //setup without summer time
-  timeClient.setTimeOffset(utcOffsetInSeconds * UTC);
-  timeClient.begin();
-
-  display.setBrightness(Display_backlight);
-  pixels.begin();  // INITIALIZE NeoPixel pixels object
-  pixels.setBrightness(led_ring_brightness);
-
-  for (int i = 0; i < NUMPIXELS; i++) {
-    pixels.setPixelColor(i, pixels.Color(red, green, blue));
-    pixels.show();
-    delay(50);
-  }
-
-  myDFPlayer.play(4);  //3_setup_complete_1.mp3
-  delay(3200);
-  myDFPlayer.play(5);  //4_intro.mp3
-  delay(1000);
-
-  flash_cuckoo();  // white flash
-
-
-  // Set timer frequency to 1Mhz
-  Timer0_Cfg = timerBegin(1000000);
-  // Attach onTimer function to our timer.
-  timerAttachInterrupt(Timer0_Cfg, &Timer0_ISR);
-  // Set alarm to call onTimer function every second (value in microseconds).
-  // Repeat the alarm (third parameter) with unlimited count = 0 (fourth parameter).
-  timerAlarm(Timer0_Cfg, 1000000, true, 0);
-
-  //Check what’s loaded into alarms[] prevously
-  for (int i = 0; i < MAX_ALARMS; i++) {
-    if (alarms[i].days[0] != '\0') {
-      Serial.print("Loaded alarm ");
-      Serial.print(i);
-      Serial.print(": ");
-      Serial.print(alarms[i].hour);
-      Serial.print(":");
-      Serial.print(alarms[i].minute);
-      Serial.print(" on ");
-      Serial.println(alarms[i].days);
-    }
-  }
-
-  //Enables Watchdog
-  /*esp_task_wdt_deinit();            //wdt is enabled by default, so we need to deinit it first
-  esp_task_wdt_init(&wdt_config);
-  esp_task_wdt_add(NULL);*/
-}
-
-void loop() {
-
-  //Rearm watchdog
-  //esp_task_wdt_reset();
-
-  // switch on the ring in blue
-  pixels.clear();  // Set all pixel colors to 'off'
-  blue_light();
-
-  // Update the time
-  timeClient.update();
-  //Serial.print("Time: ");
-  time_t epochTime = timeClient.getEpochTime();
-  struct tm* ptm = localtime(&epochTime);
-
-  currentYear = ptm->tm_year + 1900;
-  //Serial.print("Year: ");
-  //Serial.println(currentYear);
-  monthDay = ptm->tm_mday;
-  //Serial.print("Month day: ");
-  //Serial.println(monthDay);
-  currentMonth = ptm->tm_mon + 1;
-  //Serial.print("Month: ");
-  //Serial.println(currentMonth);
-
-  //setup for summer time
-  //setupForSummerTime()
-
-  // Get formattedTime as HH:mm:ss
-  formattedDate = timeClient.getFormattedTime();
-  // Get current Date
-  dayStamp = String(monthDay) + "-" + String(currentMonth) + "-" + String(currentYear);
-  //Serial.print("DATE: ");
-  //Serial.println(dayStamp);
-  // Extract current time
-  timeStamp = formattedDate.substring(0, formattedDate.length());
-  //Serial.print("TIME: ");
-  //Serial.println(timeStamp);
-  updateDisplayOled(dayStamp, timeStamp, temperature);
-
-  // Animation every hour
-  if (timeClient.getMinutes() == 00 && flag == 0) {
-
-    display_cuckoo();
-    flag = 1;
-  }
-  if (timeClient.getMinutes() >= 01) {
-    flag = 0;
-  }
-
-  // Animation every half hour
-  if (timeClient.getMinutes() == 30 && flagHalfTimer == 0) {
-
-    displayHalfTime();
-    flagHalfTimer = 1;
-  }
-  if (timeClient.getMinutes() >= 31) {
-    flagHalfTimer = 0;
-  }
-
-
-  int weekDayIndex = ptm->tm_wday;  // 0 = Sunday
-  String days[] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
-  String today = days[weekDayIndex];  // 0=Sunday
-
-  // Only check alarms once per new minute
-  int nowMinute = timeClient.getMinutes();
-  if (nowMinute != lastCheckedMinute) {
-    lastCheckedMinute = nowMinute;
-
-    //Check what’s loaded into alarms[] prevously
-    for (int i = 0; i < MAX_ALARMS; i++) {
-      if (alarms[i].days[0] != '\0') {
-        Serial.print("Loaded alarm ");
-        Serial.print(i);
-        Serial.print(": ");
-        Serial.print(alarms[i].hour);
-        Serial.print(":");
-        Serial.print(alarms[i].minute);
-        Serial.print(" on ");
-        Serial.println(alarms[i].days);
-
-        Serial.print("Comparing today='");
-        Serial.print(today);
-        Serial.print("' with stored='");
-        Serial.print(alarms[i].days);
-        Serial.println("'");
-      }
-    }
-
-    for (int i = 0; i < MAX_ALARMS; i++) {
-      if (alarms[i].days[0] != '\0') {
-        if (String(alarms[i].days).indexOf(today) >= 0 && timeClient.getHours() == alarms[i].hour && timeClient.getMinutes() == alarms[i].minute) {
-          Serial.print("🚨 Ativou o alarme! ");
-          Serial.print(alarms[i].hour);
-          Serial.print(":");
-          Serial.print(alarms[i].minute);
-          Serial.print(" on ");
-          Serial.println(today);
-          myDFPlayer.play(2);
-          break;
-        }
-      }
-    }
-  }
-
-  temperature = fetchWeather(storedCity);
-  Serial.print("Current temp in ");
-  Serial.print(storedCity);
-  Serial.print(": ");
-  Serial.println(temperature);
-
-  /////////////////////////////////////////////////////////////////////////////////////////////////////////
-  WiFiClient client = server.available();
-  if (client) {
-    if (!welcomeAlarmSetup) {
-      //myDFPlayer.play(6); //5
-      welcomeAlarmSetup = true;
-    }
-    currentTime = millis();
-    previousTime = currentTime;
-    Serial.println("New Client.");
-    String currentLine = "";
-    String requestContent = "";
-    while (client.connected() && currentTime - previousTime <= timeoutTime) {
-      currentTime = millis();
-      if (client.available()) {
-        char c = client.read();
-        Serial.write(c);
-        header += c;
-        requestContent += c;
-        if (c == '\n') {
-          if (currentLine.length() == 0) {
-            client.println("HTTP/1.1 200 OK");
-            //client.println("Content-type:text/html");
-            client.println("Content-Type: text/html; charset=UTF-8");
-            client.println("Connection: close");
-            client.println();
-
-            //**************************************************
-            if (header.indexOf("GET /L1") >= 0) {
-              Status_Led = !Status_Led;
-              if (Status_Led) {
-                ringLightStatus = true;
-              } else {
-                ringLightStatus = false;
-              }
-            }
-
-            if (header.indexOf("GET /set?") >= 0) {
-              handleSetAlarm(header);
-              client.println("<html><body><h3>Alarm Set!</h3><a href='/'>Back</a></body></html>");
-            } else {
-              client.println("<!DOCTYPE html><html>");
-              client.println("<head><meta name='viewport' content='width=device-width, initial-scale=1'>");
-              client.println("<title> J.A.R.V.I.S </title>");
-              client.println("<style>html { font-family: Helvetica; display: inline-block; text-align: center; background-color: #F0FFF0;} .button { background-color: #4CAF50; border-radius: 15px; color: white; padding: 10px 20px; font-size: 20px; margin: 2px; cursor: pointer;} .button2 { background-color: #555555; }</style></head>");
-              client.println("<body><h1> J.A.R.V.I.S </h1><h5> Powered by engleandroalves</h5>");
-
-              if (Status_Led) {
-                client.print("<a href='/L1'><button class='button'>LED-ON</button></a>");
-              } else {
-                client.print("<a href='/L1'><button class='button button2'>LED-OFF</button></a>");
-              }
-
-              // Embedded City input form
-
-              // Read current city from EEPROM
-              loadCityFromEEPROM();
-
-              // Embedded City input form
-              client.println("<h3>Weather update</h3>");
-              client.print("<p><strong>Current city:</strong> ");
-              client.print(storedCity);
-              Serial.println(storedCity);
-              client.println("</p>");
-              client.println("<form action='/set-city' method='GET'>");
-              client.println("<label for=\"city\">Select the city:</label><br>");
-              client.println("<input type=\"text\" id=\"city\" name=\"city\" placeholder=\"Enter city name\">");
-              client.println("<input type=\"submit\" value=\"Save\">");
-              client.println("</form>");
-
-              // Parse the new city from the request (GET /set-city?city=NewYork)
-              if (header.indexOf("GET /set-city?city=") >= 0) {
-                int start = header.indexOf("city=") + 5;
-                int end = header.indexOf(" ", start);
-                if (start > 4 && end > start) {
-                  String newCity = header.substring(start, end);
-                  newCity.replace("+", " ");
-                  newCity.replace("%20", " ");  // basic decode
-
-                  Serial.print("City received: ");
-                  Serial.println(newCity);
-
-                  newCity.toCharArray(storedCity, sizeof(storedCity));
-
-                  // Save to EEPROM
-                  for (int i = 0; i < sizeof(storedCity); i++) {
-                    EEPROM.write(i, storedCity[i]);
-                    if (storedCity[i] == '\0') break;
-                  }
-                  EEPROM.commit();
-
-                  Serial.print("City stored in EEPROM: ");
-                  Serial.println(storedCity);
-                } else {
-                  Serial.println("City parameter malformed or missing.");
-                }
-              }
-
-              // Embedded Alarm Form
-              client.println("<h3>Set Alarm</h3>");
-              client.println("<form action='/set' method='GET'>");
-              client.println("<p>Select Days:</p>");
-              client.println("<input type='checkbox' name='day' value='Sun'>Sun");
-              client.println("<input type='checkbox' name='day' value='Mon'>Mon");
-              client.println("<input type='checkbox' name='day' value='Tue'>Tue");
-              client.println("<input type='checkbox' name='day' value='Wed'>Wed");
-              client.println("<input type='checkbox' name='day' value='Thu'>Thu");
-              client.println("<input type='checkbox' name='day' value='Fri'>Fri");
-              client.println("<input type='checkbox' name='day' value='Sat'>Sat<br><br>");
-              client.println("<label for='hour'>Hour:</label>");
-              client.print("<select name='hour'>");
-              client.print(createOptions(23));
-              client.println("</select>");
-              client.println("<label for='minute'>Minute:</label>");
-              client.print("<select name='minute'>");
-              client.print(createOptions(59));
-              client.println("</select><br><br>");
-              client.println("<input type='submit' value='Set Alarm'></form>");
-
-              //loadAlarmFromEEPROM();
-
-              client.println("<h3>Stored Alarms:</h3><ul>");
-              for (int i = 0; i < MAX_ALARMS; i++) {
-                if (alarms[i].days[0] != '\0') {
-                  client.print("<li>⏰  ");
-                  client.print(alarms[i].hour);
-                  client.print(":");
-                  if (alarms[i].minute < 10) client.print("0");
-                  client.print(alarms[i].minute);
-                  client.print(" on ");
-                  client.print(alarms[i].days);
-                  client.print("   <a href='/delete?index=");
-                  client.print(i);
-                  client.println("'><button>Delete</button></a></li>");
-                }
-              }
-
-              if (header.indexOf("GET /delete?index=") >= 0) {
-                int idxStart = header.indexOf("index=") + 6;
-                int idxEnd = header.indexOf(" ", idxStart);
-                int index = header.substring(idxStart, idxEnd).toInt();
-                handleDeleteAlarm(index);
-                client.println("<html><body><h3>Alarm Deleted!</h3><a href='/'>Back</a></body></html>");
-              }
-
-              client.println("</body></html>");
-            }
-            client.println();
-            break;
-          } else {
-            currentLine = "";
-          }
-        } else if (c != '\r') {
-          currentLine += c;
-        }
-      }
-    }
-    header = "";
-    client.stop();
-    Serial.println("Client Disconnected.");
-    welcomeAlarmSetup = false;
-  }
-}
 
 void saveAlarmsToEEPROM() {
   int addr = 0;
@@ -754,12 +316,6 @@ void saveCityToEEPROM(const char* city) {
   Serial.println(storedCity);
 }
 
-/*void loadCityFromEEPROM() {
-  for (int i = 0; i < sizeof(storedCity); i++) {
-    storedCity[i] = EEPROM.read(100 + i);
-  }
-}*/
-
 // Load city from EEPROM
 void loadCityFromEEPROM() {
   for (int i = 0; i < sizeof(storedCity); i++) {
@@ -768,6 +324,26 @@ void loadCityFromEEPROM() {
   }
 }
 
+String urlDecodeString(String input) {
+  String decoded = "";
+  char temp[] = "0x00";
+
+  for (unsigned int i = 0; i < input.length(); i++) {
+    if (input[i] == '+') {
+      decoded += ' ';
+    } else if (input[i] == '%') {
+      if (i + 2 < input.length()) {
+        temp[2] = input[i + 1];
+        temp[3] = input[i + 2];
+        decoded += (char)strtol(temp, NULL, 16);
+        i += 2;
+      }
+    } else {
+      decoded += input[i];
+    }
+  }
+  return decoded;
+}
 
 String fetchWeather(const char* cityName) {
   if (WiFi.status() != WL_CONNECTED) {
@@ -827,7 +403,9 @@ void updateDisplayOled(String dateStamp, String timeStamp, String temperature) {
   displayOled.print(dayStamp);
   displayOled.setCursor(85, 0);
   displayOled.setTextSize(1);
-  displayOled.print(temperature);
+  displayOled.print(temperature.substring(0, 4));
+  displayOled.print(char(247));
+  displayOled.print("C");
   displayOled.setTextSize(3);
   displayOled.setCursor(7, 20);
   displayOled.print(timeStamp.substring(0, 5));
@@ -843,54 +421,135 @@ void updateDisplayOled(String dateStamp, String timeStamp, String temperature) {
 void blue_light() {
   //Rearm watchdog
   //esp_task_wdt_reset();
+
   if (ringLightStatus == true || touchLessSensor == true) {
     pixels.setBrightness(led_ring_brightness);
+    pixels.setPixelColor(0, pixels.Color(red, green, blue));
+    pixels.setPixelColor(1, pixels.Color(red, green, blue));
+    pixels.setPixelColor(2, pixels.Color(red, green, blue));
+    pixels.setPixelColor(3, pixels.Color(red, green, blue));
+    pixels.setPixelColor(4, pixels.Color(red, green, blue));
+    pixels.setPixelColor(5, pixels.Color(red, green, blue));
+    pixels.setPixelColor(6, pixels.Color(red, green, blue));
+    pixels.setPixelColor(7, pixels.Color(red, green, blue));
+    pixels.setPixelColor(8, pixels.Color(red, green, blue));
+    pixels.setPixelColor(9, pixels.Color(red, green, blue));
+    pixels.setPixelColor(10, pixels.Color(red, green, blue));
+    pixels.setPixelColor(11, pixels.Color(red, green, blue));
+    pixels.setPixelColor(12, pixels.Color(red, green, blue));
+    pixels.setPixelColor(13, pixels.Color(red, green, blue));
+    pixels.setPixelColor(14, pixels.Color(red, green, blue));
+    pixels.setPixelColor(15, pixels.Color(red, green, blue));
+    pixels.setPixelColor(16, pixels.Color(red, green, blue));
+    pixels.setPixelColor(17, pixels.Color(red, green, blue));
+    pixels.setPixelColor(18, pixels.Color(red, green, blue));
+    pixels.setPixelColor(19, pixels.Color(red, green, blue));
+    pixels.setPixelColor(20, pixels.Color(red, green, blue));
+    pixels.setPixelColor(21, pixels.Color(red, green, blue));
+    pixels.setPixelColor(22, pixels.Color(red, green, blue));
+    pixels.setPixelColor(23, pixels.Color(red, green, blue));
+    pixels.setPixelColor(24, pixels.Color(red, green, blue));
+    pixels.setPixelColor(25, pixels.Color(red, green, blue));
+    pixels.setPixelColor(26, pixels.Color(red, green, blue));
+    pixels.setPixelColor(27, pixels.Color(red, green, blue));
+    pixels.setPixelColor(28, pixels.Color(red, green, blue));
+    pixels.setPixelColor(29, pixels.Color(red, green, blue));
+    pixels.setPixelColor(30, pixels.Color(red, green, blue));
+    pixels.setPixelColor(31, pixels.Color(red, green, blue));
+    pixels.setPixelColor(32, pixels.Color(red, green, blue));
+    pixels.setPixelColor(33, pixels.Color(red, green, blue));
+    pixels.setPixelColor(34, pixels.Color(red, green, blue));
+    pixels.setPixelColor(35, pixels.Color(red, green, blue));
+    pixels.show();
   } else {
-    pixels.setBrightness(led_ring_brightness_dark);
+    pixel_off();
+  }
+}
+
+void flash_startup() {
+  //Rearm watchdog
+  //esp_task_wdt_reset();
+
+  for (int i = 0; i < (NUMPIXELS + 2); i++) {
+    pixels.setPixelColor(i, pixels.Color(red, green, blue));
+    if(i>1) {
+      pixels.setPixelColor(i - 2, pixels.Color(0, 0, 0));
+    }
+    pixels.show();
+    delay(35);
   }
 
-  pixels.setPixelColor(0, pixels.Color(red, green, blue));
-  pixels.setPixelColor(1, pixels.Color(red, green, blue));
-  pixels.setPixelColor(2, pixels.Color(red, green, blue));
-  pixels.setPixelColor(3, pixels.Color(red, green, blue));
-  pixels.setPixelColor(4, pixels.Color(red, green, blue));
-  pixels.setPixelColor(5, pixels.Color(red, green, blue));
-  pixels.setPixelColor(6, pixels.Color(red, green, blue));
-  pixels.setPixelColor(7, pixels.Color(red, green, blue));
-  pixels.setPixelColor(8, pixels.Color(red, green, blue));
-  pixels.setPixelColor(9, pixels.Color(red, green, blue));
-  pixels.setPixelColor(10, pixels.Color(red, green, blue));
-  pixels.setPixelColor(11, pixels.Color(red, green, blue));
-  pixels.setPixelColor(12, pixels.Color(red, green, blue));
-  pixels.setPixelColor(13, pixels.Color(red, green, blue));
-  pixels.setPixelColor(14, pixels.Color(red, green, blue));
-  pixels.setPixelColor(15, pixels.Color(red, green, blue));
-  pixels.setPixelColor(16, pixels.Color(red, green, blue));
-  pixels.setPixelColor(17, pixels.Color(red, green, blue));
-  pixels.setPixelColor(18, pixels.Color(red, green, blue));
-  pixels.setPixelColor(19, pixels.Color(red, green, blue));
-  pixels.setPixelColor(20, pixels.Color(red, green, blue));
-  pixels.setPixelColor(21, pixels.Color(red, green, blue));
-  pixels.setPixelColor(22, pixels.Color(red, green, blue));
-  pixels.setPixelColor(23, pixels.Color(red, green, blue));
-  pixels.setPixelColor(24, pixels.Color(red, green, blue));
-  pixels.setPixelColor(25, pixels.Color(red, green, blue));
-  pixels.setPixelColor(26, pixels.Color(red, green, blue));
-  pixels.setPixelColor(27, pixels.Color(red, green, blue));
-  pixels.setPixelColor(28, pixels.Color(red, green, blue));
-  pixels.setPixelColor(29, pixels.Color(red, green, blue));
-  pixels.setPixelColor(30, pixels.Color(red, green, blue));
-  pixels.setPixelColor(31, pixels.Color(red, green, blue));
-  pixels.setPixelColor(32, pixels.Color(red, green, blue));
-  pixels.setPixelColor(33, pixels.Color(red, green, blue));
-  pixels.setPixelColor(34, pixels.Color(red, green, blue));
-  pixels.setPixelColor(35, pixels.Color(red, green, blue));
+  for (int i = 0; i < (NUMPIXELS + 2); i++) {
+    pixels.setPixelColor(i, pixels.Color(red, green, blue));
+    if(i>1) {
+      pixels.setPixelColor(i - 2, pixels.Color(0, 0, 0));
+    }
+    pixels.show();
+    delay(15);
+  }
+
+  for (int i = 0; i < (NUMPIXELS + 2); i++) {
+    pixels.setPixelColor(i, pixels.Color(red, green, blue));
+    if(i>1) {
+      pixels.setPixelColor(i - 2, pixels.Color(0, 0, 0));
+    }
+    pixels.show();
+    delay(5);
+  }
+
+  pixels.setBrightness(led_ring_brightness_flash);
+  pixels.setPixelColor(0, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(1, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(2, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(3, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(4, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(5, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(6, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(7, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(8, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(9, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(10, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(11, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(12, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(13, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(14, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(15, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(16, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(17, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(18, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(19, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(20, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(21, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(22, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(23, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(24, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(25, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(26, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(27, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(28, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(29, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(30, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(31, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(32, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(33, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(34, pixels.Color(250, 250, 250));
+  pixels.setPixelColor(35, pixels.Color(250, 250, 250));
   pixels.show();
+
+  for (int i = led_ring_brightness_flash; i > 10; i--) {
+    pixels.setBrightness(i);
+    pixels.show();
+    delay(7);
+  }
+  blue_light();
 }
 
 void flash_cuckoo() {
   //Rearm watchdog
   //esp_task_wdt_reset();
+
+  myDFPlayer.play(8);  //7__clock_time_0.mp3
+  delay(200);
 
   pixels.setBrightness(led_ring_brightness_flash);
   pixels.setPixelColor(0, pixels.Color(250, 250, 250));
@@ -954,6 +613,47 @@ void display_cuckoo() {
   flash_cuckoo();
 
   delay(2000);
+}
+
+void pixel_off() {
+  pixels.setBrightness(led_ring_brightness_dark);
+  pixels.setPixelColor(0, pixels.Color(0,0,0));
+  pixels.setPixelColor(1, pixels.Color(0,0,0));
+  pixels.setPixelColor(2, pixels.Color(0,0,0));
+  pixels.setPixelColor(3, pixels.Color(0,0,0));
+  pixels.setPixelColor(4, pixels.Color(0,0,0));
+  pixels.setPixelColor(5, pixels.Color(0,0,0));
+  pixels.setPixelColor(6, pixels.Color(0,0,0));
+  pixels.setPixelColor(7, pixels.Color(0,0,0));
+  pixels.setPixelColor(8, pixels.Color(0,0,0));
+  pixels.setPixelColor(9, pixels.Color(0,0,0));
+  pixels.setPixelColor(10, pixels.Color(0,0,0));
+  pixels.setPixelColor(11, pixels.Color(0,0,0));
+  pixels.setPixelColor(12, pixels.Color(0,0,0));
+  pixels.setPixelColor(13, pixels.Color(0,0,0));
+  pixels.setPixelColor(14, pixels.Color(0,0,0));
+  pixels.setPixelColor(15, pixels.Color(0,0,0));
+  pixels.setPixelColor(16, pixels.Color(0,0,0));
+  pixels.setPixelColor(17, pixels.Color(0,0,0));
+  pixels.setPixelColor(18, pixels.Color(0,0,0));
+  pixels.setPixelColor(19, pixels.Color(0,0,0));
+  pixels.setPixelColor(20, pixels.Color(0,0,0));
+  pixels.setPixelColor(21, pixels.Color(0,0,0));
+  pixels.setPixelColor(22, pixels.Color(0,0,0));
+  pixels.setPixelColor(23, pixels.Color(0,0,0));
+  pixels.setPixelColor(24, pixels.Color(0,0,0));
+  pixels.setPixelColor(25, pixels.Color(0,0,0));
+  pixels.setPixelColor(26, pixels.Color(0,0,0));
+  pixels.setPixelColor(27, pixels.Color(0,0,0));
+  pixels.setPixelColor(28, pixels.Color(0,0,0));
+  pixels.setPixelColor(29, pixels.Color(0,0,0));
+  pixels.setPixelColor(30, pixels.Color(0,0,0));
+  pixels.setPixelColor(31, pixels.Color(0,0,0));
+  pixels.setPixelColor(32, pixels.Color(0,0,0));
+  pixels.setPixelColor(33, pixels.Color(0,0,0));
+  pixels.setPixelColor(34, pixels.Color(0,0,0));
+  pixels.setPixelColor(35, pixels.Color(0,0,0));
+  pixels.show();
 }
 
 void displayHalfTime() {
