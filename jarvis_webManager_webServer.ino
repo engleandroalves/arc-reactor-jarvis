@@ -657,16 +657,48 @@ void pixel_off() {
 }
 
 void displayHalfTime() {
+
+  pixel_off();
+
+  for (int i = 0; i < (NUMPIXELS + 2); i++) {
+    pixels.setPixelColor(i, pixels.Color(255, 153, 51));
+    if(i>1) {
+      pixels.setPixelColor(i - 2, pixels.Color(0, 0, 0));
+    }
+    pixels.show();
+    delay(20);
+  }
   for (int i = 0; i < (NUMPIXELS); i++) {
     pixels.setPixelColor(i, pixels.Color(255, 153, 51));
     pixels.show();
-    delay(100);
+    delay(50);
   }
-  for (int i = 0; i < NUMPIXELS; i++) {
-    pixels.setPixelColor(i, pixels.Color(red, green, blue));
+
+  pixel_off();
+
+  for (int i = 0; i < (NUMPIXELS + 2); i++) {
+    pixels.setPixelColor(i, pixels.Color(245, 255, 250)); //Mint scream
+    if(i>1) {
+      pixels.setPixelColor(i - 2, pixels.Color(0, 0, 0));
+    }
     pixels.show();
-    delay(100);
+    delay(20);
   }
+
+  for (int i = 0; i < NUMPIXELS; i++) {
+    pixels.setPixelColor(i, pixels.Color(255, 255, 255));
+    pixels.show();
+    delay(50);
+  }
+
+  for (int i = led_ring_brightness_flash; i > 10; i--) {
+    pixels.setBrightness(i);
+    pixels.show();
+    delay(7);
+  }
+
+  blue_light();
+
 }
 
 void setupForSummerTime() {
